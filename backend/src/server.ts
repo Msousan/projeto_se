@@ -34,17 +34,17 @@ function minutesBetween(start: Date, end: Date) {
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token = req.headers.authorization?.replace("Bearer ", "");
-  if (!token) return res.status(401).json({ message: "Token nao informado." });
+  if (!token) return res.status(401).json({ message: "Token não informado." });
   try {
     req.user = jwt.verify(token, jwtSecret) as AuthUser;
     next();
   } catch {
-    res.status(401).json({ message: "Token invalido." });
+    res.status(401).json({ message: "Token inválido." });
   }
 }
 
 const allowRoles = (...roles: Role[]) => (req: Request, res: Response, next: NextFunction) => {
-  if (!req.user || !roles.includes(req.user.role)) return res.status(403).json({ message: "Acesso negado." });
+  if (!req.user || !roles.includes(req.user.role)) return res.status(403).json({ message: "Você não tem permissão para realizar esta ação." });
   next();
 };
 
@@ -57,7 +57,7 @@ app.post("/auth/login", asyncHandler(async (req, res) => {
   const data = loginSchema.parse(req.body);
   const user = await prisma.user.findUnique({ where: { email: data.email } });
   if (!user || !(await bcrypt.compare(data.password, user.password_hash))) {
-    return res.status(401).json({ message: "Email ou senha invalidos." });
+    return res.status(401).json({ message: "E-mail ou senha inválidos." });
   }
   const payload: AuthUser = {
     id: user.id,
@@ -205,7 +205,7 @@ app.post("/requests", requireAuth, allowRoles("MANAGER", "SUPERVISOR"), asyncHan
   });
   const data = schema.parse(req.body);
   if (req.user?.role === "SUPERVISOR" && req.user.store_id !== data.store_id) {
-    return res.status(403).json({ message: "Supervisora so pode criar solicitacao para sua loja." });
+    return res.status(403).json({ message: "A supervisora só pode criar solicitação para a loja vinculada a ela." });
   }
   const count = await prisma.request.count();
   const request_code = `SOL-${String(count + 1).padStart(5, "0")}`;
@@ -233,8 +233,8 @@ app.post("/requests", requireAuth, allowRoles("MANAGER", "SUPERVISOR"), asyncHan
 app.get("/requests/:id", requireAuth, asyncHandler(async (req, res) => {
   const { id } = idParam.parse(req.params);
   const request = await prisma.request.findUnique({ where: { id }, include: requestInclude });
-  if (!request) return res.status(404).json({ message: "Solicitacao nao encontrada." });
-  if (req.user?.role === "SUPERVISOR" && req.user.store_id !== request.store_id) return res.status(403).json({ message: "Acesso negado." });
+  if (!request) return res.status(404).json({ message: "Solicitação não encontrada." });
+  if (req.user?.role === "SUPERVISOR" && req.user.store_id !== request.store_id) return res.status(403).json({ message: "Você não tem permissão para realizar esta ação." });
   res.json(request);
 }));
 
@@ -247,10 +247,10 @@ app.put("/requests/:id", requireAuth, allowRoles("MANAGER"), asyncHandler(async 
 app.post("/requests/:id/generate-productions", requireAuth, allowRoles("MANAGER"), asyncHandler(async (req, res) => {
   const { id } = idParam.parse(req.params);
   const request = await prisma.request.findUnique({ where: { id }, include: { items: true } });
-  if (!request) return res.status(404).json({ message: "Solicitacao nao encontrada." });
-  if (await prisma.production.count({ where: { request_id: id } })) return res.status(409).json({ message: "Producoes ja foram geradas para esta solicitacao." });
+  if (!request) return res.status(404).json({ message: "Solicitação não encontrada." });
+  if (await prisma.production.count({ where: { request_id: id } })) return res.status(409).json({ message: "Produções já foram geradas para esta solicitação." });
   const operators = await prisma.operator.findMany({ where: { status: "ACTIVE" }, orderBy: [{ name: "asc" }, { id: "asc" }] });
-  if (!operators.length) return res.status(400).json({ message: "Nao ha operadores ativos para distribuir producoes." });
+  if (!operators.length) return res.status(400).json({ message: "Não há operadores ativos para distribuir produções." });
   const baseCount = await prisma.production.count();
   const productions = await prisma.$transaction(request.items.map((item, index) => prisma.production.create({
     data: {
@@ -269,6 +269,24 @@ app.post("/requests/:id/generate-productions", requireAuth, allowRoles("MANAGER"
   })));
   await prisma.request.update({ where: { id }, data: { status: "IN_PRODUCTION" } });
   res.status(201).json(productions);
+}));
+
+app.delete("/requests/:id", requireAuth, allowRoles("MANAGER"), asyncHandler(async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const request = await prisma.request.findUnique({ where: { id }, include: { productions: true } });
+  if (!request) return res.status(404).json({ message: "Solicitação não encontrada." });
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.pause.deleteMany({ where: { production: { request_id: id } } });
+      await tx.production.deleteMany({ where: { request_id: id } });
+      await tx.requestItem.deleteMany({ where: { request_id: id } });
+      await tx.request.delete({ where: { id } });
+    });
+    res.json({ message: "Solicitação apagada com sucesso." });
+  } catch {
+    res.status(500).json({ message: "Não foi possível apagar a solicitação." });
+  }
 }));
 
 function productionWhereForUser(req: Request): Prisma.ProductionWhereInput {
@@ -297,8 +315,8 @@ app.get("/productions/my-queue", requireAuth, allowRoles("OPERATOR"), asyncHandl
 app.get("/productions/:id", requireAuth, asyncHandler(async (req, res) => {
   const { id } = idParam.parse(req.params);
   const production = await prisma.production.findUnique({ where: { id }, include: { store: true, request: true, pauses: true, operator: true } });
-  if (!production) return res.status(404).json({ message: "Producao nao encontrada." });
-  if (req.user?.role === "OPERATOR" && production.operator_id !== req.user.operator_id) return res.status(403).json({ message: "Acesso negado." });
+  if (!production) return res.status(404).json({ message: "Produção não encontrada." });
+  if (req.user?.role === "OPERATOR" && production.operator_id !== req.user.operator_id) return res.status(403).json({ message: "Você não tem permissão para realizar esta ação." });
   res.json(production);
 }));
 
@@ -306,11 +324,11 @@ async function getOwnProduction(req: Request, res: Response) {
   const { id } = idParam.parse(req.params);
   const production = await prisma.production.findUnique({ where: { id }, include: { pauses: true } });
   if (!production) {
-    res.status(404).json({ message: "Producao nao encontrada." });
+    res.status(404).json({ message: "Produção não encontrada." });
     return null;
   }
   if (req.user?.role === "OPERATOR" && production.operator_id !== req.user.operator_id) {
-    res.status(403).json({ message: "Operador nao pode alterar producao de outro operador." });
+    res.status(403).json({ message: "O operador não pode alterar produção de outro operador." });
     return null;
   }
   return production;
@@ -319,14 +337,14 @@ async function getOwnProduction(req: Request, res: Response) {
 app.post("/productions/:id/start", requireAuth, allowRoles("OPERATOR"), asyncHandler(async (req, res) => {
   const production = await getOwnProduction(req, res);
   if (!production) return;
-  if (production.status !== "PENDING") return res.status(400).json({ message: "Somente producao pendente pode ser iniciada." });
+  if (production.status !== "PENDING") return res.status(400).json({ message: "Somente produção pendente pode ser iniciada." });
   res.json(await prisma.production.update({ where: { id: production.id }, data: { status: "IN_PROGRESS", started_at: new Date() } }));
 }));
 
 app.post("/productions/:id/pause", requireAuth, allowRoles("OPERATOR"), asyncHandler(async (req, res) => {
   const production = await getOwnProduction(req, res);
   if (!production) return;
-  if (production.status !== "IN_PROGRESS" || !production.started_at) return res.status(400).json({ message: "Somente producao em andamento pode ser pausada." });
+  if (production.status !== "IN_PROGRESS" || !production.started_at) return res.status(400).json({ message: "Somente produção em andamento pode ser pausada." });
   const { reason } = z.object({ reason: z.enum(["WATER", "BATHROOM", "BREAK", "WAITING_MATERIAL", "MAINTENANCE", "OTHER"]) }).parse(req.body);
   const pause = await prisma.$transaction(async (tx) => {
     await tx.production.update({ where: { id: production.id }, data: { status: "PAUSED" } });
@@ -338,23 +356,23 @@ app.post("/productions/:id/pause", requireAuth, allowRoles("OPERATOR"), asyncHan
 app.post("/productions/:id/resume", requireAuth, allowRoles("OPERATOR"), asyncHandler(async (req, res) => {
   const production = await getOwnProduction(req, res);
   if (!production) return;
-  if (production.status !== "PAUSED") return res.status(400).json({ message: "Somente producao pausada pode ser retomada." });
+  if (production.status !== "PAUSED") return res.status(400).json({ message: "Somente produção pausada pode ser retomada." });
   const openPause = await prisma.pause.findFirst({ where: { production_id: production.id, pause_finished_at: null }, orderBy: { pause_started_at: "desc" } });
-  if (!openPause) return res.status(400).json({ message: "Nao ha pausa aberta para retomar." });
+  if (!openPause) return res.status(400).json({ message: "Não há pausa aberta para retomar." });
   const now = new Date();
   await prisma.$transaction([
     prisma.pause.update({ where: { id: openPause.id }, data: { pause_finished_at: now, duration_minutes: minutesBetween(openPause.pause_started_at, now) } }),
     prisma.production.update({ where: { id: production.id }, data: { status: "IN_PROGRESS" } })
   ]);
-  res.json({ message: "Producao retomada." });
+  res.json({ message: "Produção retomada." });
 }));
 
 app.post("/productions/:id/finish", requireAuth, allowRoles("OPERATOR"), asyncHandler(async (req, res) => {
   const production = await getOwnProduction(req, res);
   if (!production) return;
-  if (!production.started_at) return res.status(400).json({ message: "Producao precisa ser iniciada antes de finalizar." });
-  if (production.status === "PAUSED") return res.status(400).json({ message: "Retome a producao antes de finalizar." });
-  if (production.status !== "IN_PROGRESS") return res.status(400).json({ message: "Somente producao em andamento pode ser finalizada." });
+  if (!production.started_at) return res.status(400).json({ message: "Produção precisa ser iniciada antes de finalizar." });
+  if (production.status === "PAUSED") return res.status(400).json({ message: "Retome a produção antes de finalizar." });
+  if (production.status !== "IN_PROGRESS") return res.status(400).json({ message: "Somente produção em andamento pode ser finalizada." });
   const now = new Date();
   const pauses = await prisma.pause.findMany({ where: { production_id: production.id, pause_finished_at: { not: null } } });
   const paused_time_minutes = pauses.reduce((sum, pause) => sum + (pause.duration_minutes ?? 0), 0);
@@ -369,6 +387,22 @@ app.post("/productions/:id/finish", requireAuth, allowRoles("OPERATOR"), asyncHa
 app.post("/productions/:id/cancel", requireAuth, allowRoles("MANAGER"), asyncHandler(async (req, res) => {
   const { id } = idParam.parse(req.params);
   res.json(await prisma.production.update({ where: { id }, data: { status: "CANCELED" } }));
+}));
+
+app.delete("/productions/:id", requireAuth, allowRoles("MANAGER"), asyncHandler(async (req, res) => {
+  const { id } = idParam.parse(req.params);
+  const production = await prisma.production.findUnique({ where: { id } });
+  if (!production) return res.status(404).json({ message: "Produção não encontrada." });
+
+  try {
+    await prisma.$transaction([
+      prisma.pause.deleteMany({ where: { production_id: id } }),
+      prisma.production.delete({ where: { id } })
+    ]);
+    res.json({ message: "Produção apagada com sucesso." });
+  } catch {
+    res.status(500).json({ message: "Não foi possível apagar a produção." });
+  }
 }));
 
 app.get("/dashboard/manager", requireAuth, allowRoles("MANAGER"), asyncHandler(async (_req, res) => {
@@ -397,7 +431,7 @@ app.get("/dashboard/manager", requireAuth, allowRoles("MANAGER"), asyncHandler(a
 }));
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  if (error instanceof z.ZodError) return res.status(400).json({ message: "Dados invalidos.", issues: error.flatten() });
+  if (error instanceof z.ZodError) return res.status(400).json({ message: "Dados inválidos.", issues: error.flatten() });
   if (error instanceof Prisma.PrismaClientKnownRequestError) return res.status(400).json({ message: "Erro de banco de dados.", code: error.code });
   console.error(error);
   res.status(500).json({ message: "Erro interno do servidor." });
