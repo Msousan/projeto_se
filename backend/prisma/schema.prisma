@@ -1,0 +1,139 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int       @id @default(autoincrement())
+  name          String
+  email         String    @unique
+  password_hash String
+  role          String
+  operator_id   Int?
+  store_id      Int?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  operator      Operator? @relation(fields: [operator_id], references: [id])
+  store         Store?    @relation(fields: [store_id], references: [id])
+}
+
+model Store {
+  id             Int            @id @default(autoincrement())
+  name           String
+  distance_km    Float
+  logistics_type String
+  active         Boolean        @default(true)
+  created_at     DateTime       @default(now())
+  updated_at     DateTime       @updatedAt
+  requests       Request[]
+  productions    Production[]
+  users          User[]
+}
+
+model Operator {
+  id             Int              @id @default(autoincrement())
+  name           String
+  email          String           @unique
+  sector         String
+  status         String           @default("ACTIVE")
+  daily_capacity Int
+  observation    String?
+  created_at     DateTime         @default(now())
+  updated_at     DateTime         @updatedAt
+  users          User[]
+  productions    Production[]
+  pauses         Pause[]
+}
+
+model Product {
+  id                   Int           @id @default(autoincrement())
+  name                 String
+  package_weight       Float
+  unit                 String
+  category             String
+  average_time_minutes Int
+  active               Boolean       @default(true)
+  observation          String?
+  created_at           DateTime      @default(now())
+  updated_at           DateTime      @updatedAt
+  request_items        RequestItem[]
+}
+
+model Request {
+  id                   Int            @id @default(autoincrement())
+  request_code         String         @unique
+  request_date         DateTime
+  reference_week       String
+  store_id             Int
+  responsible_name     String
+  desired_receipt_date DateTime
+  status               String         @default("REQUESTED")
+  created_at           DateTime       @default(now())
+  updated_at           DateTime       @updatedAt
+  store                Store          @relation(fields: [store_id], references: [id])
+  items                RequestItem[]
+  productions          Production[]
+}
+
+model RequestItem {
+  id                  Int          @id @default(autoincrement())
+  request_id          Int
+  product_id          Int?
+  product_name        String
+  package_weight      Float
+  unit                String
+  requested_quantity  Int
+  current_store_stock Int
+  ideal_stock         Int
+  suggested_quantity  Int
+  created_at          DateTime     @default(now())
+  updated_at          DateTime     @updatedAt
+  request             Request      @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  product             Product?     @relation(fields: [product_id], references: [id])
+  productions         Production[]
+}
+
+model Production {
+  id                   Int              @id @default(autoincrement())
+  production_code      String           @unique
+  request_item_id      Int
+  request_id           Int
+  store_id             Int
+  product_name         String
+  package_weight       Float
+  unit                 String
+  production_quantity  Int
+  operator_id          Int
+  status               String           @default("PENDING")
+  started_at           DateTime?
+  finished_at          DateTime?
+  gross_time_minutes   Int?
+  paused_time_minutes  Int?
+  net_time_minutes     Int?
+  internal_observation String?
+  created_at           DateTime         @default(now())
+  updated_at           DateTime         @updatedAt
+  request_item         RequestItem      @relation(fields: [request_item_id], references: [id])
+  request              Request          @relation(fields: [request_id], references: [id])
+  store                Store            @relation(fields: [store_id], references: [id])
+  operator             Operator         @relation(fields: [operator_id], references: [id])
+  pauses               Pause[]
+}
+
+model Pause {
+  id                 Int         @id @default(autoincrement())
+  production_id      Int
+  operator_id        Int
+  pause_started_at   DateTime
+  pause_finished_at  DateTime?
+  reason             String
+  duration_minutes   Int?
+  created_at         DateTime    @default(now())
+  updated_at         DateTime    @updatedAt
+  production         Production  @relation(fields: [production_id], references: [id], onDelete: Cascade)
+  operator           Operator    @relation(fields: [operator_id], references: [id])
+}
